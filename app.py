@@ -11,16 +11,24 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
-st.title("📊 AI Stockout Loss Predictor (Auto Best Model)")
+st.set_page_config(layout="wide")
+st.title("📊 Stockout Loss Predictor - Step by Step ML Pipeline")
 
-uploaded_file = st.file_uploader("Upload Retail Dataset", type=["csv"])
+# ------------------ STEP 1: LOAD DATA ------------------
+st.header("Step 1: Upload Dataset")
+file = st.file_uploader("Upload CSV File", type=["csv"])
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    st.write("### Dataset Preview", df.head())
+if file:
+    df = pd.read_csv(file)
+    st.success("Dataset Loaded Successfully ✅")
+    st.dataframe(df.head())
 
-    # 🔥 CREATE TARGET
+    # ------------------ STEP 2: TARGET CREATION ------------------
+    st.header("Step 2: Create Target Variable")
+
     if 'Stockout Loss' not in df.columns:
+        st.info("No Stockout Loss column → Creating automatically")
+
         demand_col, stock_col = None, None
 
         for col in df.columns:
@@ -31,13 +39,24 @@ if uploaded_file:
 
         if demand_col and stock_col:
             df['Stockout Loss'] = np.maximum(df[demand_col] - df[stock_col], 0)
+            st.success(f"Created using {demand_col} & {stock_col}")
         else:
             st.error("Need Demand & Stock columns")
             st.stop()
 
     target = "Stockout Loss"
 
-    if st.button("🚀 Train & Select Best Model"):
+    # ------------------ STEP 3: MODEL SELECTION ------------------
+    st.header("Step 3: Select Models")
+
+    selected_models = st.multiselect(
+        "Choose Models",
+        ["Linear Regression", "Ridge", "Random Forest", "Gradient Boosting"],
+        default=["Random Forest", "Gradient Boosting"]
+    )
+
+    # ------------------ STEP 4: TRAIN ------------------
+    if st.button("🚀 Train Selected Models"):
 
         X = df.drop(columns=[target])
         y = df[target]
@@ -47,6 +66,7 @@ if uploaded_file:
         # Encoding
         encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
         cat_cols = X.select_dtypes(include=['object']).columns
+
         if len(cat_cols) > 0:
             X[cat_cols] = encoder.fit_transform(X[cat_cols])
 
@@ -60,8 +80,8 @@ if uploaded_file:
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
 
-        # 🔥 MODELS
-        models = {
+        # Model dictionary
+        model_dict = {
             "Linear Regression": LinearRegression(),
             "Ridge": Ridge(),
             "Random Forest": RandomForestRegressor(n_estimators=100, n_jobs=-1),
@@ -69,43 +89,44 @@ if uploaded_file:
         }
 
         results = []
-
         best_model = None
         best_score = -999
 
-        st.subheader("📊 Model Comparison")
+        st.header("Step 4: Model Training Results")
 
-        for name, model in models.items():
-            model.fit(X_train, y_train)
+        for name in selected_models:
+            model = model_dict[name]
 
-            y_pred = model.predict(X_test)
+            with st.spinner(f"Training {name}..."):
+                model.fit(X_train, y_train)
 
-            train_acc = model.score(X_train, y_train)
-            test_acc = model.score(X_test, y_test)
-            r2 = r2_score(y_test, y_pred)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            mae = mean_absolute_error(y_test, y_pred)
+                y_pred = model.predict(X_test)
 
-            results.append([name, train_acc, test_acc, r2, rmse, mae])
+                train_acc = model.score(X_train, y_train)
+                test_acc = model.score(X_test, y_test)
+                r2 = r2_score(y_test, y_pred)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                mae = mean_absolute_error(y_test, y_pred)
 
-            # Select best
-            if r2 > best_score:
-                best_score = r2
-                best_model = model
-                best_name = name
+                results.append([name, train_acc, test_acc, r2, rmse, mae])
+
+                if r2 > best_score:
+                    best_score = r2
+                    best_model = model
+                    best_name = name
 
         results_df = pd.DataFrame(results, columns=[
-            "Model", "Train R2", "Test R2", "R2 Score", "RMSE", "MAE"
+            "Model", "Train Accuracy", "Test Accuracy", "R2", "RMSE", "MAE"
         ])
 
-        st.write(results_df)
+        st.dataframe(results_df)
 
-        st.success(f"🏆 Best Model: {best_name}")
+        st.success(f"🏆 Best Model Selected: {best_name}")
 
-        # 🔥 PREDICTIONS (BEST MODEL)
+        # ------------------ STEP 5: PRODUCT OUTPUT ------------------
+        st.header("Step 5: Product-wise Predictions")
+
         y_pred_best = best_model.predict(X_test)
-
-        st.subheader("📦 Product-wise Predictions")
 
         result_df = pd.DataFrame({
             "Product ID": pid_test.values,
@@ -123,7 +144,7 @@ Predicted Loss = {round(row['Predicted Loss'],2)}
 ----------------------------------------
 """)
 
-        # 💾 SAVE BEST MODEL
+        # ------------------ STEP 6: SAVE MODEL ------------------
         model_data = {
             "model": best_model,
             "scaler": scaler,
@@ -134,6 +155,40 @@ Predicted Loss = {round(row['Predicted Loss'],2)}
         with open("best_model.pkl", "wb") as f:
             pickle.dump(model_data, f)
 
-        # DOWNLOAD
+        st.success("Model Saved ✅")
+
         with open("best_model.pkl", "rb") as f:
-            st.download_button("📥 Download Best Model", f, "best_model.pkl")
+            st.download_button("📥 Download Model", f, "best_model.pkl")
+
+    # ------------------ STEP 7: FULL PREDICTION ------------------
+    st.header("Step 6: Predict Full Dataset")
+
+    if st.button("🔮 Predict All Data"):
+        try:
+            with open("best_model.pkl", "rb") as f:
+                data = pickle.load(f)
+
+            model = data["model"]
+            scaler = data["scaler"]
+            encoder = data["encoder"]
+            saved_cols = data["columns"]
+
+            X = df.drop(columns=[target])
+
+            cat_cols = X.select_dtypes(include=['object']).columns
+            if len(cat_cols) > 0:
+                X[cat_cols] = encoder.transform(X[cat_cols])
+
+            for col in saved_cols:
+                if col not in X:
+                    X[col] = 0
+
+            X = X[saved_cols]
+            X_scaled = scaler.transform(X)
+
+            df["Predicted Loss"] = model.predict(X_scaled)
+
+            st.dataframe(df.head(20))
+
+        except Exception as e:
+            st.error(e)
