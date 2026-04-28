@@ -11,7 +11,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
 st.set_page_config(layout="wide")
-st.title("📊 Stockout & Revenue Loss Predictor")
+st.title("Stockout & Revenue Loss Predictor")
 
 # ------------------ LOAD DATA ------------------
 file = st.file_uploader("Upload Retail Dataset", type=["csv"])
@@ -35,7 +35,7 @@ if file:
             category_col = col
 
     if not (demand_col and stock_col and price_col):
-        st.error("❌ Need Demand, Stock, Price columns")
+        st.error(" Need Demand, Stock, Price columns")
         st.stop()
 
     st.success(f"Detected → Demand: {demand_col}, Stock: {stock_col}, Price: {price_col}")
@@ -58,7 +58,7 @@ if file:
     )
 
     # ------------------ TRAIN ------------------
-    if st.button("🚀 Train Models"):
+    if st.button("Train Models"):
 
         target = demand_col
         X = df.drop(columns=[target])
@@ -121,7 +121,7 @@ if file:
                 best_pred = y_pred
                 best_name = name
 
-        st.subheader("📊 Model Comparison")
+        st.subheader(" Model Comparison")
         st.dataframe(pd.DataFrame(results, columns=[
             "Model", "Train R2", "Test R2", "R2", "RMSE", "MAE"
         ]))
@@ -159,7 +159,7 @@ if file:
         # ------------------ FILTER LOSS ONLY ------------------
         loss_df = grouped_df[grouped_df["Predicted Loss"] > 0]
 
-        st.subheader("📦 Loss Products")
+        st.subheader(" Loss Products")
 
         if len(loss_df) == 0:
             st.success("✅ All products have sufficient stock (No Loss)")
