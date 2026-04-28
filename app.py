@@ -14,15 +14,15 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 st.set_page_config(layout="wide")
 st.title("📊 Smart Stockout & Revenue Loss Predictor")
 
-# ------------------ STEP 1: LOAD ------------------
+# ------------------ STEP 1: LOAD DATA ------------------
 file = st.file_uploader("Upload Retail Dataset", type=["csv"])
 
 if file:
     df = pd.read_csv(file)
-    st.success("Dataset Loaded ✅")
+    st.success("Dataset Loaded Successfully ✅")
     st.dataframe(df.head())
 
-    # ------------------ STEP 2: DETECT COLUMNS ------------------
+    # ------------------ STEP 2: DETECT REQUIRED COLUMNS ------------------
     demand_col, stock_col, price_col = None, None, None
 
     for col in df.columns:
@@ -34,7 +34,7 @@ if file:
             price_col = col
 
     if not (demand_col and stock_col and price_col):
-        st.error("❌ Dataset must have Demand, Stock, and Price columns")
+        st.error("❌ Dataset must contain Demand, Stock, and Price columns")
         st.stop()
 
     st.success(f"Detected → Demand: {demand_col}, Stock: {stock_col}, Price: {price_col}")
@@ -52,33 +52,38 @@ if file:
         default=["Random Forest", "Gradient Boosting"]
     )
 
-    # ------------------ STEP 5: TRAIN DEMAND MODEL ------------------
-    if st.button("🚀 Train Model"):
+    # ------------------ STEP 5: TRAIN ------------------
+    if st.button("🚀 Train Models"):
 
-        target = demand_col   # 🔥 Predict demand instead of loss
+        target = demand_col  # Predict demand
 
         X = df.drop(columns=[target])
         y = df[target]
 
         product_ids = df["Product ID"] if "Product ID" in df.columns else pd.Series(range(len(df)))
 
-        # Encoding
+        # 🔥 ENCODING
         encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
         cat_cols = X.select_dtypes(include=['object']).columns
+
         if len(cat_cols) > 0:
             X[cat_cols] = encoder.fit_transform(X[cat_cols])
 
-        # Split
-        X_train, X_test, y_train, y_test, pid_test = train_test_split(
+        # 🔥 SPLIT (FIXED)
+        X_train, X_test, y_train, y_test, pid_train, pid_test = train_test_split(
             X, y, product_ids, test_size=0.2, random_state=42
         )
 
-        # Scale
+        # Reset index (CRITICAL FIX)
+        X_test = pd.DataFrame(X_test).reset_index(drop=True)
+        pid_test = pd.Series(pid_test).reset_index(drop=True)
+
+        # 🔥 SCALING
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
+        X_test_scaled = scaler.transform(X_test)
 
-        # Models
+        # 🔥 MODELS
         model_dict = {
             "Linear Regression": LinearRegression(),
             "Ridge": Ridge(),
@@ -89,15 +94,16 @@ if file:
         results = []
         best_model = None
         best_score = -999
+        best_name = ""
 
         for name in selected_models:
             model = model_dict[name]
 
             model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            y_pred = model.predict(X_test_scaled)
 
             train_acc = model.score(X_train, y_train)
-            test_acc = model.score(X_test, y_test)
+            test_acc = model.score(X_test_scaled, y_test)
             r2 = r2_score(y_test, y_pred)
             rmse = np.sqrt(mean_squared_error(y_test, y_pred))
             mae = mean_absolute_error(y_test, y_pred)
@@ -108,9 +114,11 @@ if file:
                 best_score = r2
                 best_model = model
                 best_name = name
+                best_pred = y_pred
 
+        # ------------------ STEP 6: RESULTS ------------------
         results_df = pd.DataFrame(results, columns=[
-            "Model", "Train R2", "Test R2", "R2 Score", "RMSE", "MAE"
+            "Model", "Train R2", "Test R2", "R2", "RMSE", "MAE"
         ])
 
         st.subheader("📊 Model Comparison")
@@ -118,23 +126,19 @@ if file:
 
         st.success(f"🏆 Best Model: {best_name}")
 
-        # ------------------ STEP 6: PREDICT DEMAND ------------------
-        y_pred_best = best_model.predict(X_test)
+        # ------------------ STEP 7: LOSS CALCULATION ------------------
+        stock_values = df.iloc[pid_test.index][stock_col].values
+        price_values = df.iloc[pid_test.index][price_col].values
 
-        # ------------------ STEP 7: CALCULATE LOSS ------------------
-        stock_values = df.loc[pid_test.index, stock_col].values
-        price_values = df.loc[pid_test.index, price_col].values
-
-        predicted_loss = np.maximum(y_pred_best - stock_values, 0) * price_values
+        predicted_loss = np.maximum(best_pred - stock_values, 0) * price_values
 
         # ------------------ STEP 8: OUTPUT ------------------
-        st.subheader("📦 Product-wise Output")
+        st.subheader("📦 Product-wise Predictions")
 
         result_df = pd.DataFrame({
-            "Product ID": pid_test.values,
+            "Product ID": pid_test,
             "Stock": stock_values,
-            "Actual Demand": df.loc[pid_test.index, demand_col].values,
-            "Predicted Demand": y_pred_best,
+            "Predicted Demand": best_pred,
             "Predicted Loss": predicted_loss
         })
 
@@ -142,12 +146,12 @@ if file:
             st.text(f"""
 Product {row['Product ID']}:
 Stock = {int(row['Stock'])}
-Demand = {round(row['Predicted Demand'],2)}
-Predicted Loss = {round(row['Predicted Loss'],2)}
+Demand = {round(row['Predicted Demand'], 2)}
+Predicted Loss = {round(row['Predicted Loss'], 2)}
 ----------------------------------------
 """)
 
-        # ------------------ SAVE MODEL ------------------
+        # ------------------ STEP 9: SAVE MODEL ------------------
         model_data = {
             "model": best_model,
             "scaler": scaler,
@@ -157,18 +161,18 @@ Predicted Loss = {round(row['Predicted Loss'],2)}
             "price_col": price_col
         }
 
-        with open("smart_model.pkl", "wb") as f:
+        with open("final_model.pkl", "wb") as f:
             pickle.dump(model_data, f)
 
-        st.success("Model Saved ✅")
+        st.success("✅ Model Saved Successfully")
 
-        with open("smart_model.pkl", "rb") as f:
-            st.download_button("📥 Download Model", f, "smart_model.pkl")
+        with open("final_model.pkl", "rb") as f:
+            st.download_button("📥 Download Model", f, "final_model.pkl")
 
-    # ------------------ STEP 9: FULL PREDICTION ------------------
+    # ------------------ STEP 10: FULL DATA PREDICTION ------------------
     if st.button("🔮 Predict Full Dataset"):
         try:
-            with open("smart_model.pkl", "rb") as f:
+            with open("final_model.pkl", "rb") as f:
                 data = pickle.load(f)
 
             model = data["model"]
@@ -199,4 +203,4 @@ Predicted Loss = {round(row['Predicted Loss'],2)}
             st.dataframe(df.head(20))
 
         except Exception as e:
-            st.error(e)
+            st.error(f"Error: {e}")
