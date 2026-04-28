@@ -10,19 +10,45 @@ from sklearn.metrics import r2_score, mean_squared_error
 
 st.title("📊 Stockout Loss Predictor (AI Model)")
 
-# Upload dataset
 uploaded_file = st.file_uploader("Upload Retail Dataset", type=["csv"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
     st.write("Dataset Preview", df.head())
 
-    # Target column
-    target_col = st.selectbox("Select Target Column", df.columns)
+    # 🔥 STEP 1: AUTO CREATE TARGET IF NOT EXISTS
+    if 'Stockout Loss' not in df.columns:
 
+        st.warning("No 'Stockout Loss' column found → Creating automatically")
+
+        # Try to detect useful columns
+        cols = df.columns.tolist()
+
+        demand_col = None
+        stock_col = None
+
+        for col in cols:
+            if "demand" in col.lower():
+                demand_col = col
+            if "stock" in col.lower() or "inventory" in col.lower():
+                stock_col = col
+
+        if demand_col and stock_col:
+            df['Stockout Loss'] = np.maximum(df[demand_col] - df[stock_col], 0)
+            st.success(f"Created Stockout Loss using {demand_col} & {stock_col}")
+        else:
+            st.error("❌ Cannot auto-create target. Please ensure dataset has Demand & Stock columns")
+            st.stop()
+
+    target_col = "Stockout Loss"
+
+    # 🔥 Train Model
     if st.button("Train Model"):
         X = df.drop(columns=[target_col])
         y = df[target_col]
+
+        # Handle non-numeric columns
+        X = pd.get_dummies(X)
 
         # Split
         X_train, X_test, y_train, y_test = train_test_split(
@@ -43,34 +69,42 @@ if uploaded_file:
 
         model.fit(X_train, y_train)
 
-        # Predictions
         y_pred = model.predict(X_test)
 
         train_acc = model.score(X_train, y_train)
         test_acc = model.score(X_test, y_test)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
-        # Show metrics
         st.subheader("📈 Model Performance")
         st.write(f"Train Accuracy (R2): {train_acc:.3f}")
         st.write(f"Test Accuracy (R2): {test_acc:.3f}")
         st.write(f"RMSE: {rmse:.2f}")
 
-        # Save model
+        # Save model + columns
         joblib.dump(model, "model.pkl")
         joblib.dump(scaler, "scaler.pkl")
+        joblib.dump(X.columns.tolist(), "columns.pkl")
 
         st.success("Model trained & saved successfully ✅")
 
-    # Prediction Section
+    # 🔮 Prediction
     if st.button("Predict using saved model"):
         try:
             model = joblib.load("model.pkl")
             scaler = joblib.load("scaler.pkl")
+            saved_cols = joblib.load("columns.pkl")
 
             X = df.drop(columns=[target_col])
-            X_scaled = scaler.transform(X)
+            X = pd.get_dummies(X)
 
+            # Align columns
+            for col in saved_cols:
+                if col not in X:
+                    X[col] = 0
+
+            X = X[saved_cols]
+
+            X_scaled = scaler.transform(X)
             predictions = model.predict(X_scaled)
 
             df['Predicted Loss'] = predictions
@@ -78,5 +112,5 @@ if uploaded_file:
             st.subheader("🔮 Predictions")
             st.write(df.head(10))
 
-        except:
-            st.error("Train model first!")
+        except Exception as e:
+            st.error(f"Error: {e}")
