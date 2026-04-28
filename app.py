@@ -22,7 +22,7 @@ if file:
     st.success("Dataset Loaded Successfully ✅")
     st.dataframe(df.head())
 
-    # ------------------ STEP 2: DETECT REQUIRED COLUMNS ------------------
+    # ------------------ STEP 2: DETECT COLUMNS ------------------
     demand_col, stock_col, price_col = None, None, None
 
     for col in df.columns:
@@ -55,35 +55,35 @@ if file:
     # ------------------ STEP 5: TRAIN ------------------
     if st.button("🚀 Train Models"):
 
-        target = demand_col  # Predict demand
+        target = demand_col
 
         X = df.drop(columns=[target])
         y = df[target]
 
         product_ids = df["Product ID"] if "Product ID" in df.columns else pd.Series(range(len(df)))
 
-        # 🔥 ENCODING
+        # Encoding
         encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
         cat_cols = X.select_dtypes(include=['object']).columns
 
         if len(cat_cols) > 0:
             X[cat_cols] = encoder.fit_transform(X[cat_cols])
 
-        # 🔥 SPLIT (FIXED)
+        # Split (FIXED)
         X_train, X_test, y_train, y_test, pid_train, pid_test = train_test_split(
             X, y, product_ids, test_size=0.2, random_state=42
         )
 
-        # Reset index (CRITICAL FIX)
+        # Reset index
         X_test = pd.DataFrame(X_test).reset_index(drop=True)
         pid_test = pd.Series(pid_test).reset_index(drop=True)
 
-        # 🔥 SCALING
+        # Scale
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-        # 🔥 MODELS
+        # Models
         model_dict = {
             "Linear Regression": LinearRegression(),
             "Ridge": Ridge(),
@@ -95,6 +95,7 @@ if file:
         best_model = None
         best_score = -999
         best_name = ""
+        best_pred = None
 
         for name in selected_models:
             model = model_dict[name]
@@ -132,7 +133,7 @@ if file:
 
         predicted_loss = np.maximum(best_pred - stock_values, 0) * price_values
 
-        # ------------------ STEP 8: OUTPUT ------------------
+        # ------------------ STEP 8: PRODUCT OUTPUT ------------------
         st.subheader("📦 Product-wise Predictions")
 
         result_df = pd.DataFrame({
@@ -158,7 +159,8 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
             "encoder": encoder,
             "columns": X.columns.tolist(),
             "stock_col": stock_col,
-            "price_col": price_col
+            "price_col": price_col,
+            "demand_col": demand_col
         }
 
         with open("final_model.pkl", "wb") as f:
@@ -179,6 +181,9 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
             scaler = data["scaler"]
             encoder = data["encoder"]
             saved_cols = data["columns"]
+            stock_col = data["stock_col"]
+            price_col = data["price_col"]
+            demand_col = data["demand_col"]
 
             X = df.drop(columns=[demand_col])
 
@@ -201,6 +206,66 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
             ) * df[price_col]
 
             st.dataframe(df.head(20))
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+    # ------------------ STEP 11: MANUAL PRODUCT CHECK ------------------
+    st.header("🔍 Manual Product Loss Check")
+
+    if st.button("Load Model for Manual Prediction"):
+        try:
+            with open("final_model.pkl", "rb") as f:
+                data = pickle.load(f)
+
+            model = data["model"]
+            scaler = data["scaler"]
+            encoder = data["encoder"]
+            saved_cols = data["columns"]
+            stock_col = data["stock_col"]
+            price_col = data["price_col"]
+            demand_col = data["demand_col"]
+
+            if "Product ID" in df.columns:
+                product_id = st.selectbox("Select Product ID", df["Product ID"].unique())
+                product_data = df[df["Product ID"] == product_id].iloc[0]
+
+                st.write("Product Details", product_data)
+
+                stock_input = st.number_input("Stock Available", value=float(product_data[stock_col]))
+                price_input = st.number_input("Price", value=float(product_data[price_col]))
+
+                input_df = pd.DataFrame([product_data])
+
+                if demand_col in input_df.columns:
+                    input_df = input_df.drop(columns=[demand_col])
+
+                cat_cols = input_df.select_dtypes(include=['object']).columns
+                if len(cat_cols) > 0:
+                    input_df[cat_cols] = encoder.transform(input_df[cat_cols])
+
+                for col in saved_cols:
+                    if col not in input_df:
+                        input_df[col] = 0
+
+                input_df = input_df[saved_cols]
+                input_scaled = scaler.transform(input_df)
+
+                pred_demand = model.predict(input_scaled)[0]
+                pred_loss = max(pred_demand - stock_input, 0) * price_input
+
+                st.subheader("📦 Manual Prediction Result")
+
+                st.text(f"""
+Product {product_id}:
+Stock = {stock_input}
+Predicted Demand = {round(pred_demand, 2)}
+Predicted Loss = {round(pred_loss, 2)}
+----------------------------------------
+""")
+
+            else:
+                st.warning("No Product ID column found")
 
         except Exception as e:
             st.error(f"Error: {e}")
