@@ -21,8 +21,8 @@ if file:
     st.success("Dataset Loaded ✅")
     st.dataframe(df.head())
 
-    # ------------------ COLUMN DETECTION ------------------
-    demand_col, stock_col, price_col = None, None, None
+    # ------------------ DETECT COLUMNS ------------------
+    demand_col, stock_col, price_col, category_col = None, None, None, None
 
     for col in df.columns:
         if "demand" in col.lower():
@@ -31,15 +31,24 @@ if file:
             stock_col = col
         if "price" in col.lower() or "revenue" in col.lower():
             price_col = col
+        if "category" in col.lower():
+            category_col = col
 
     if not (demand_col and stock_col and price_col):
         st.error("❌ Need Demand, Stock, Price columns")
         st.stop()
 
-    st.success(f"Detected → {demand_col}, {stock_col}, {price_col}")
+    st.success(f"Detected → Demand: {demand_col}, Stock: {stock_col}, Price: {price_col}")
+
+    if category_col:
+        st.info(f"Category column detected: {category_col}")
 
     # ------------------ FEATURE ENGINEERING ------------------
     df['Demand_Stock_Ratio'] = df[demand_col] / (df[stock_col] + 1)
+
+    # Optional strong feature
+    if category_col:
+        df["Product_Category"] = df["Product ID"].astype(str) + "_" + df[category_col].astype(str)
 
     # ------------------ MODEL SELECTION ------------------
     selected_models = st.multiselect(
@@ -55,25 +64,30 @@ if file:
         X = df.drop(columns=[target])
         y = df[target]
 
-        product_ids = df["Product ID"] if "Product ID" in df.columns else pd.Series(range(len(df)))
+        product_ids = df["Product ID"]
 
+        # Encoding
         encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
         cat_cols = X.select_dtypes(include=['object']).columns
 
         if len(cat_cols) > 0:
             X[cat_cols] = encoder.fit_transform(X[cat_cols])
 
+        # Split
         X_train, X_test, y_train, y_test, pid_train, pid_test = train_test_split(
             X, y, product_ids, test_size=0.2, random_state=42
         )
 
+        # Reset index
         X_test = pd.DataFrame(X_test).reset_index(drop=True)
         pid_test = pd.Series(pid_test).reset_index(drop=True)
 
+        # Scale
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
+        # Models
         model_dict = {
             "Linear Regression": LinearRegression(),
             "Ridge": Ridge(),
@@ -127,20 +141,38 @@ if file:
             "Predicted Loss": predicted_loss
         })
 
-        # ------------------ FILTER ONLY LOSS ------------------
-        loss_df = result_df[result_df["Predicted Loss"] > 0]
+        # Add category if exists
+        if category_col:
+            result_df[category_col] = df.iloc[pid_test.index][category_col].values
 
-        st.subheader("📦 Loss Products Only")
+        # ------------------ GROUPING (PRODUCT + CATEGORY) ------------------
+        group_cols = ["Product ID"]
+        if category_col:
+            group_cols.append(category_col)
+
+        grouped_df = result_df.groupby(group_cols).agg({
+            "Stock": "mean",
+            "Predicted Demand": "mean",
+            "Predicted Loss": "sum"
+        }).reset_index()
+
+        # ------------------ FILTER LOSS ONLY ------------------
+        loss_df = grouped_df[grouped_df["Predicted Loss"] > 0]
+
+        st.subheader("📦 Loss Products")
 
         if len(loss_df) == 0:
             st.success("✅ All products have sufficient stock (No Loss)")
         else:
             for _, row in loss_df.iterrows():
+
+                category_text = f" | Category = {row[category_col]}" if category_col else ""
+
                 st.text(f"""
-Product {row['Product ID']}:
+Product {row['Product ID']}{category_text}:
 Stock = {int(row['Stock'])}
 Predicted Demand = {round(row['Predicted Demand'], 2)}
-Predicted Loss = {round(row['Predicted Loss'], 2)}
+Total Predicted Loss = {round(row['Predicted Loss'], 2)}
 ----------------------------------------
 """)
 
@@ -152,7 +184,8 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
             "columns": X.columns.tolist(),
             "stock_col": stock_col,
             "price_col": price_col,
-            "demand_col": demand_col
+            "demand_col": demand_col,
+            "category_col": category_col
         }
 
         with open("final_model.pkl", "wb") as f:
@@ -174,6 +207,7 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
             stock_col = data["stock_col"]
             price_col = data["price_col"]
             demand_col = data["demand_col"]
+            category_col = data["category_col"]
 
             X = df.drop(columns=[demand_col])
 
@@ -195,8 +229,18 @@ Predicted Loss = {round(row['Predicted Loss'], 2)}
                 pred_demand - df[stock_col], 0
             ) * df[price_col]
 
-            # 🔥 FILTER ONLY LOSS
-            loss_df = df[df["Predicted Loss"] > 0]
+            # GROUP AGAIN
+            group_cols = ["Product ID"]
+            if category_col:
+                group_cols.append(category_col)
+
+            grouped_df = df.groupby(group_cols).agg({
+                stock_col: "mean",
+                "Predicted Demand": "mean",
+                "Predicted Loss": "sum"
+            }).reset_index()
+
+            loss_df = grouped_df[grouped_df["Predicted Loss"] > 0]
 
             if len(loss_df) == 0:
                 st.success("✅ All products have sufficient stock")
