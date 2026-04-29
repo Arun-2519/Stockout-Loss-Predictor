@@ -1,251 +1,118 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import pickle
+import numpy as np
+from pathlib import Path
+import matplotlib.pyplot as plt
+import pandas as pd
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+# -------------------------------
+# LOAD MODEL & SCALER
+# -------------------------------
+BASE_DIR = Path(__file__).resolve().parent
 
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+model = pickle.load(open(BASE_DIR / "model.pkl", "rb"))
+scaler = pickle.load(open(BASE_DIR / "scaler.pkl", "rb"))
 
-st.set_page_config(layout="wide")
-st.title("Stockout & Revenue Loss Predictor")
+# -------------------------------
+# PAGE SETTINGS
+# -------------------------------
+st.set_page_config(page_title="Stockout Loss Predictor", layout="wide")
 
-# ------------------ LOAD DATA ------------------
-file = st.file_uploader("Upload Retail Dataset", type=["csv"])
+st.title("📦 AI Stockout Loss Prediction System")
+st.markdown("Predict potential stock loss and get smart alerts for better inventory decisions.")
 
-if file:
-    df = pd.read_csv(file)
-    st.success("Dataset Loaded ✅")
-    st.dataframe(df.head())
+# -------------------------------
+# SIDEBAR INPUT
+# -------------------------------
+st.sidebar.header("📥 Enter Product Details")
 
-    # ------------------ DETECT COLUMNS ------------------
-    demand_col, stock_col, price_col, category_col = None, None, None, None
+inventory = st.sidebar.number_input("Inventory Level", min_value=0, value=100)
+units_sold = st.sidebar.number_input("Units Sold", min_value=0, value=80)
+forecast = st.sidebar.number_input("Demand Forecast", min_value=0, value=120)
+price = st.sidebar.number_input("Price (₹)", min_value=0.0, value=50.0)
+discount = st.sidebar.number_input("Discount (%)", min_value=0.0, max_value=100.0, value=10.0)
+competitor_price = st.sidebar.number_input("Competitor Price (₹)", min_value=0.0, value=55.0)
 
-    for col in df.columns:
-        if "demand" in col.lower():
-            demand_col = col
-        if "stock" in col.lower() or "inventory" in col.lower():
-            stock_col = col
-        if "price" in col.lower() or "revenue" in col.lower():
-            price_col = col
-        if "category" in col.lower():
-            category_col = col
+# -------------------------------
+# PREDICTION
+# -------------------------------
+input_data = np.array([[inventory, units_sold, forecast, price, discount, competitor_price]])
+input_scaled = scaler.transform(input_data)
+prediction = model.predict(input_scaled)[0]
 
-    if not (demand_col and stock_col and price_col):
-        st.error(" Need Demand, Stock, Price columns")
-        st.stop()
+# -------------------------------
+# RISK CLASSIFICATION
+# -------------------------------
+def classify_risk(inv, demand, loss):
+    if demand > inv:
+        return "High Risk", "🔴"
+    elif loss > 500:
+        return "Medium Risk", "🟡"
+    else:
+        return "Safe", "🟢"
 
-    st.success(f"Detected → Demand: {demand_col}, Stock: {stock_col}, Price: {price_col}")
+risk, icon = classify_risk(inventory, forecast, prediction)
 
-    if category_col:
-        st.info(f"Category column detected: {category_col}")
+# -------------------------------
+# ALERT SYSTEM
+# -------------------------------
+st.subheader("🚨 Alert System")
 
-    # ------------------ FEATURE ENGINEERING ------------------
-    df['Demand_Stock_Ratio'] = df[demand_col] / (df[stock_col] + 1)
+if risk == "High Risk":
+    st.error(f"⚠️ HIGH RISK of stockout! Estimated Loss: ₹{prediction:.2f}")
+elif risk == "Medium Risk":
+    st.warning(f"⚠️ Moderate Risk. Estimated Loss: ₹{prediction:.2f}")
+else:
+    st.success(f"✅ Safe Stock Level. Estimated Loss: ₹{prediction:.2f}")
 
-    # Optional strong feature
-    if category_col:
-        df["Product_Category"] = df["Product ID"].astype(str) + "_" + df[category_col].astype(str)
+# -------------------------------
+# DASHBOARD
+# -------------------------------
+col1, col2 = st.columns(2)
 
-    # ------------------ MODEL SELECTION ------------------
-    selected_models = st.multiselect(
-        "Select Models",
-        ["Linear Regression", "Ridge", "Random Forest", "Gradient Boosting"],
-        default=["Random Forest", "Gradient Boosting"]
-    )
+# 📊 Loss Trend
+with col1:
+    st.subheader("📊 Loss Trend")
 
-    # ------------------ TRAIN ------------------
-    if st.button("Train Models"):
+    trend_data = pd.DataFrame({
+        "Day": range(1, 8),
+        "Loss": [200, 250, 300, 400, 350, 450, prediction]
+    })
 
-        target = demand_col
-        X = df.drop(columns=[target])
-        y = df[target]
+    fig, ax = plt.subplots()
+    ax.plot(trend_data["Day"], trend_data["Loss"], marker='o')
+    ax.set_xlabel("Days")
+    ax.set_ylabel("Loss")
+    ax.set_title("Weekly Loss Trend")
 
-        product_ids = df["Product ID"]
+    st.pyplot(fig)
 
-        # Encoding
-        encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
-        cat_cols = X.select_dtypes(include=['object']).columns
+# 📉 Stock vs Demand
+with col2:
+    st.subheader("📉 Inventory vs Demand Forecast")
 
-        if len(cat_cols) > 0:
-            X[cat_cols] = encoder.fit_transform(X[cat_cols])
+    fig2, ax2 = plt.subplots()
+    ax2.bar(["Inventory", "Forecast"], [inventory, forecast])
+    ax2.set_title("Stock vs Demand")
 
-        # Split
-        X_train, X_test, y_train, y_test, pid_train, pid_test = train_test_split(
-            X, y, product_ids, test_size=0.2, random_state=42
-        )
+    st.pyplot(fig2)
 
-        # Reset index
-        X_test = pd.DataFrame(X_test).reset_index(drop=True)
-        pid_test = pd.Series(pid_test).reset_index(drop=True)
+# -------------------------------
+# SUMMARY
+# -------------------------------
+st.subheader("📋 Prediction Summary")
 
-        # Scale
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
+summary = {
+    "Inventory Level": inventory,
+    "Demand Forecast": forecast,
+    "Predicted Loss (₹)": round(prediction, 2),
+    "Risk Level": risk
+}
 
-        # Models
-        model_dict = {
-            "Linear Regression": LinearRegression(),
-            "Ridge": Ridge(),
-            "Random Forest": RandomForestRegressor(n_estimators=100, n_jobs=-1),
-            "Gradient Boosting": GradientBoostingRegressor()
-        }
+st.table(pd.DataFrame(summary.items(), columns=["Metric", "Value"]))
 
-        results = []
-        best_model = None
-        best_score = -999
-        best_pred = None
-        best_name = ""
-
-        for name in selected_models:
-            model = model_dict[name]
-            model.fit(X_train, y_train)
-
-            y_pred = model.predict(X_test_scaled)
-
-            train_acc = model.score(X_train, y_train)
-            test_acc = model.score(X_test_scaled, y_test)
-            r2 = r2_score(y_test, y_pred)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            mae = mean_absolute_error(y_test, y_pred)
-
-            results.append([name, train_acc, test_acc, r2, rmse, mae])
-
-            if r2 > best_score:
-                best_score = r2
-                best_model = model
-                best_pred = y_pred
-                best_name = name
-
-        st.subheader(" Model Comparison")
-        st.dataframe(pd.DataFrame(results, columns=[
-            "Model", "Train R2", "Test R2", "R2", "RMSE", "MAE"
-        ]))
-
-        st.success(f"🏆 Best Model: {best_name}")
-
-        # ------------------ LOSS CALCULATION ------------------
-        stock_values = df.iloc[pid_test.index][stock_col].values
-        price_values = df.iloc[pid_test.index][price_col].values
-
-        predicted_loss = np.maximum(best_pred - stock_values, 0) * price_values
-
-        result_df = pd.DataFrame({
-            "Product ID": pid_test,
-            "Stock": stock_values,
-            "Predicted Demand": best_pred,
-            "Predicted Loss": predicted_loss
-        })
-
-        # Add category if exists
-        if category_col:
-            result_df[category_col] = df.iloc[pid_test.index][category_col].values
-
-        # ------------------ GROUPING (PRODUCT + CATEGORY) ------------------
-        group_cols = ["Product ID"]
-        if category_col:
-            group_cols.append(category_col)
-
-        grouped_df = result_df.groupby(group_cols).agg({
-            "Stock": "mean",
-            "Predicted Demand": "mean",
-            "Predicted Loss": "sum"
-        }).reset_index()
-
-        # ------------------ FILTER LOSS ONLY ------------------
-        loss_df = grouped_df[grouped_df["Predicted Loss"] > 0]
-
-        st.subheader(" Loss Products")
-
-        if len(loss_df) == 0:
-            st.success("✅ All products have sufficient stock (No Loss)")
-        else:
-            for _, row in loss_df.iterrows():
-
-                category_text = f" | Category = {row[category_col]}" if category_col else ""
-
-                st.text(f"""
-Product {row['Product ID']}{category_text}:
-Stock = {int(row['Stock'])}
-Predicted Demand = {round(row['Predicted Demand'], 2)}
-Total Predicted Loss = {round(row['Predicted Loss'], 2)}
-----------------------------------------
-""")
-
-        # ------------------ SAVE MODEL ------------------
-        model_data = {
-            "model": best_model,
-            "scaler": scaler,
-            "encoder": encoder,
-            "columns": X.columns.tolist(),
-            "stock_col": stock_col,
-            "price_col": price_col,
-            "demand_col": demand_col,
-            "category_col": category_col
-        }
-
-        with open("final_model.pkl", "wb") as f:
-            pickle.dump(model_data, f)
-
-        with open("final_model.pkl", "rb") as f:
-            st.download_button("📥 Download Model", f, "final_model.pkl")
-
-    # ------------------ FULL DATA PREDICTION ------------------
-    if st.button("🔮 Predict Full Dataset"):
-        try:
-            with open("final_model.pkl", "rb") as f:
-                data = pickle.load(f)
-
-            model = data["model"]
-            scaler = data["scaler"]
-            encoder = data["encoder"]
-            saved_cols = data["columns"]
-            stock_col = data["stock_col"]
-            price_col = data["price_col"]
-            demand_col = data["demand_col"]
-            category_col = data["category_col"]
-
-            X = df.drop(columns=[demand_col])
-
-            cat_cols = X.select_dtypes(include=['object']).columns
-            if len(cat_cols) > 0:
-                X[cat_cols] = encoder.transform(X[cat_cols])
-
-            for col in saved_cols:
-                if col not in X:
-                    X[col] = 0
-
-            X = X[saved_cols]
-            X_scaled = scaler.transform(X)
-
-            pred_demand = model.predict(X_scaled)
-
-            df["Predicted Demand"] = pred_demand
-            df["Predicted Loss"] = np.maximum(
-                pred_demand - df[stock_col], 0
-            ) * df[price_col]
-
-            # GROUP AGAIN
-            group_cols = ["Product ID"]
-            if category_col:
-                group_cols.append(category_col)
-
-            grouped_df = df.groupby(group_cols).agg({
-                stock_col: "mean",
-                "Predicted Demand": "mean",
-                "Predicted Loss": "sum"
-            }).reset_index()
-
-            loss_df = grouped_df[grouped_df["Predicted Loss"] > 0]
-
-            if len(loss_df) == 0:
-                st.success("✅ All products have sufficient stock")
-            else:
-                st.dataframe(loss_df.head(20))
-
-        except Exception as e:
-            st.error(f"Error: {e}")
+# -------------------------------
+# FOOTER
+# -------------------------------
+st.markdown("---")
+st.markdown("🔍 Powered by Machine Learning | Built with Streamlit")
